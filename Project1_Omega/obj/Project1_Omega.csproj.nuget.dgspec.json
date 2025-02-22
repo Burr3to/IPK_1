@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\Project1_Omega\\Project1_Omega\\Project1_Omega.csproj": {}
+    "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\IPK_1_Omega\\Project1_Omega\\Project1_Omega.csproj": {}
   },
   "projects": {
-    "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\Project1_Omega\\Project1_Omega\\Project1_Omega.csproj": {
+    "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\IPK_1_Omega\\Project1_Omega\\Project1_Omega.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\Project1_Omega\\Project1_Omega\\Project1_Omega.csproj",
+        "projectUniqueName": "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\IPK_1_Omega\\Project1_Omega\\Project1_Omega.csproj",
         "projectName": "Project1_Omega",
-        "projectPath": "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\Project1_Omega\\Project1_Omega\\Project1_Omega.csproj",
+        "projectPath": "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\IPK_1_Omega\\Project1_Omega\\Project1_Omega.csproj",
         "packagesPath": "C:\\Users\\filoj\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\Project1_Omega\\Project1_Omega\\obj\\",
+        "outputPath": "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\IPK_1_Omega\\Project1_Omega\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

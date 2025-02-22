@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "UJlFaWeSu5A=",
+  "dgSpecHash": "DPQ079lkdqc=",
   "success": true,
-  "projectFilePath": "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\Project1_Omega\\Project1_Omega\\Project1_Omega.csproj",
+  "projectFilePath": "C:\\Users\\filoj\\RiderProjects\\Project1_omega\\dev-envs\\ipk\\IPK_1_Omega\\Project1_Omega\\Project1_Omega.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\filoj\\.nuget\\packages\\packetdotnet\\1.4.7\\packetdotnet.1.4.7.nupkg.sha512",
     "C:\\Users\\filoj\\.nuget\\packages\\sharppcap\\6.3.0\\sharppcap.6.3.0.nupkg.sha512",
