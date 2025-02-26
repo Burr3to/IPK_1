@@ -1,6 +1,7 @@
 ﻿using System;
 using Project1_Omega.Scanners;
 using SharpPcap;
+using System.Net;
 
 namespace Project1_Omega;
 
@@ -18,17 +19,39 @@ class Program
 
 
 		var parser = new CommandLineParser(args);
+
 		Console.WriteLine("Interface: " + (parser.Interface ?? "None"));
 		Console.WriteLine("Timeout: " + parser.Timeout);
 		Console.WriteLine("TCP Ports: " + (parser.TcpPorts.Count > 0 ? string.Join(",", parser.TcpPorts) : "None"));
 		Console.WriteLine("UDP Ports: " + (parser.UdpPorts.Count > 0 ? string.Join(",", parser.UdpPorts) : "None"));
 		Console.WriteLine("Domain/IP: " + (parser.DomainOrIp ?? "None"));
 
-		// Perform TCP Scans
-		if (parser.DomainOrIp != null && parser.TcpPorts.Count > 0)
+		// Ensure the user provided a domain or IP to scan
+		if (parser.DomainOrIp == null)
 		{
-			TcpScanner tcpScanner = new TcpScanner(parser.DomainOrIp, parser.TcpPorts, parser.Timeout);
-			await tcpScanner.ScanTcpAsync(); // Runs the TCP scan
+			Console.WriteLine("Error: No target domain or IP address provided.");
+			return;
+		}
+
+		// Resolve target (domain name → IP address)
+		IPAddress? targetIp;
+		try
+		{
+			targetIp = IPAddress.TryParse(parser.DomainOrIp, out IPAddress parsedIp)
+				? parsedIp : Utils.ResolveDomain(parser.DomainOrIp);
+		}
+		catch (Exception e)
+		{
+			Console.WriteLine($"Error: Could not resolve target {parser.DomainOrIp}. {e.Message}");
+			return;
+		}
+
+		// Perform TCP Scan
+		if (parser.TcpPorts.Count > 0)
+		{
+			TcpScanner tcpScanner =
+				new TcpScanner(targetIp.ToString(), parser.TcpPorts, parser.Timeout, parser.Interface);
+			await tcpScanner.ScanTcpAsync();
 		}
 	}
 }

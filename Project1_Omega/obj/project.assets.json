@@ -197,6 +197,7 @@
   },
   "projectFileDependencyGroups": {
     "net9.0": [
+      "PacketDotNet >= 1.4.7",
       "SharpPcap >= 6.3.0"
     ]
   },
@@ -251,6 +252,10 @@
       "net9.0": {
         "targetAlias": "net9.0",
         "dependencies": {
+          "PacketDotNet": {
+            "target": "Package",
+            "version": "[1.4.7, )"
+          },
           "SharpPcap": {
             "target": "Package",
             "version": "[6.3.0, )"

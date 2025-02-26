@@ -8,7 +8,8 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="SharpPcap" Version="6.3.0" />
+        <PackageReference Include="PacketDotNet" Version="1.4.7" />
+        <PackageReference Include="SharpPcap" Version="6.3.0" />
     </ItemGroup>
 
 </Project>

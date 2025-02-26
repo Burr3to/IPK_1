@@ -51,6 +51,10 @@
         "net9.0": {
           "targetAlias": "net9.0",
           "dependencies": {
+            "PacketDotNet": {
+              "target": "Package",
+              "version": "[1.4.7, )"
+            },
             "SharpPcap": {
               "target": "Package",
               "version": "[6.3.0, )"
