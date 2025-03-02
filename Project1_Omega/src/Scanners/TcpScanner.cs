@@ -1,4 +1,3 @@
-using PacketDotNet.Tcp;
 using PacketDotNet.Utils;
 using static Project1_Omega.Utils;
 
@@ -53,115 +52,19 @@ namespace Project1_Omega.Scanners
 		//Scans one port at a time, sends a SYN packet to the ip/port and analyses their response. (OPEN,CLOSED,FILTERED)
 		private void ScanTcpPort(int port)
 		{
-			try
-			{
-				// Parse target IP address // get device interfaces
-				IPAddress ipAddress = IPAddress.Parse(_targetIp);
-				ICaptureDevice? device = GetNetworkInterface();
+			// Parse target IP address // get device interfaces
+			IPAddress targetIp = IPAddress.Parse(_targetIp);
+			ICaptureDevice? device = GetNetworkInterface(_interfaceName) ?? throw new Exception("No network interface found.");
+			PhysicalAddress targetMac = GetDestinationMac(targetIp, device);
 
-				//Capturing all packets
-				device.Open(DeviceModes.Promiscuous, _timeout);
-
-				int sourceport = 0;
-				bool responseReceived = false;
-				int sentSourcePort = 0;
-
-				HashSet<int> processedPorts = new HashSet<int>(); // Ensure we process each port only once
-
-
-				device.OnPacketArrival += (sender, e) =>
-				{
-					//Extracting data from captured packet
-					var rawPacket = e.GetPacket();
-					var packet = Packet.ParsePacket(rawPacket.LinkLayerType, rawPacket.Data);
-					var ipPacket = packet.Extract<IPv4Packet>();
-					var tcpPacket = packet.Extract<TcpPacket>();
-
-					if (ipPacket == null || tcpPacket == null)
-						return;
-
-
-					// Skip irrelevant packets
-					if (!ipPacket.SourceAddress.Equals(IPAddress.Parse(_targetIp)))
-						return;
-					if (tcpPacket.DestinationPort != sentSourcePort)
-						return;
-
-					responseReceived = true;
-
-					// Detect Open or Closed Port
-					if ((tcpPacket.Flags & (ushort)TcpFlags.SynAck) == (ushort)(TcpFlags.SynAck)) // SYN-ACK
-						Console.WriteLine($"[OnPacketArrival] ✅ Port {port}/tcp is OPEN");
-					else if ((tcpPacket.Flags & (ushort)TcpFlags.Rst) != 0) // RST
-						Console.WriteLine($"[OnPacketArrival] ❌ Port {port}/tcp is CLOSED");
-					else
-						Console.WriteLine($"[OnPacketArrival] ⚠ Unexpected TCP flags: 0x{tcpPacket.Flags:X2}");
-
-					// Track processed ports
-					processedPorts.Add(tcpPacket.SourcePort);
-					device.StopCapture();
-					device.Close();
-				};
-
-				//Start capturing packets as response and send SYN packet
-				device.StartCapture();
-				SendSynPacket(device, ipAddress, port, out sentSourcePort);
-
-				// Waiting for packet capture
-				Thread.Sleep(_timeout);
-
-				// Stop capturing after catch
-				device.StopCapture();
-				device.Close();
-
-				if (!responseReceived)
-					Console.WriteLine($"Port {port}/tcp is FILTERED (No response)");
-			}
-			catch (Exception ex)
-			{
-				Console.Error.WriteLine($"[ScanTcpPort] Error scanning port {port}/tcp: {ex.Message}");
-			}
+			Console.WriteLine("target ip: " + targetIp);
+			Console.WriteLine("target MAC: " + targetMac);
 		}
 
-		private ICaptureDevice? GetNetworkInterface()
+
+		private void SendSynPacket(ICaptureDevice device, IPAddress ipAddress, int port, int sentSourcePort)
 		{
-			var devices = CaptureDeviceList.Instance;
-			if (devices.Count < 1)
-			{
-				Console.Error.WriteLine("[ScanTcpPort] No network interfaces found. Exiting.");
-				return null;
-			}
-
-			ICaptureDevice? device = null;
-			if (!string.IsNullOrEmpty(_interfaceName))
-			{
-				device = devices.FirstOrDefault(d =>
-					d.Name.Contains(_interfaceName, StringComparison.OrdinalIgnoreCase)
-					|| d.Description.Contains(_interfaceName, StringComparison.OrdinalIgnoreCase));
-
-				if (device == null)
-				{
-					Console.Error.WriteLine($"[ScanTcpPort] Error: Specified interface '{_interfaceName}' not found.");
-					return null;
-				}
-			}
-			else
-			{
-				Console.WriteLine("Available Interfaces:");
-				foreach (var dev in devices)
-				{
-					Console.WriteLine($"  - {dev.Name} ({dev.Description})");
-				}
-
-				return null;
-			}
-
-			return device;
-		}
-
-		private void SendSynPacket(ICaptureDevice device, IPAddress ipAddress, int port, out int sentSourcePort)
-		{
-			byte[] bytepacketBytes = BuildTcpSynPacket(device, ipAddress, port, out sentSourcePort);
+			byte[] bytepacketBytes = BuildIpv4TcpSynPacket(device, ipAddress, port, sentSourcePort);
 
 			if (device is ILiveDevice liveDevice)
 			{
@@ -174,67 +77,23 @@ namespace Project1_Omega.Scanners
 			}
 		}
 
-		private byte[] BuildTcpSynPacket(ICaptureDevice device, IPAddress targetIp, int targetPort, out int sourcePort)
+		private byte[] BuildIpv4TcpSynPacket(ICaptureDevice device, IPAddress targetIp, int targetPort, int sourcePort)
 		{
 			try
 			{
 				// Get correct MAC addresses
 				PhysicalAddress sourceMac = GetMacAddressFromDevice(device);
-				PhysicalAddress destMac = GetDestinationMac(targetIp);
+				PhysicalAddress destMac = GetDestinationMac(targetIp, device) ?? throw new Exception($"Could not resolve MAC address for {targetIp}");
+				Console.WriteLine("ARPACKET   " + destMac);
 
-				// Create Ethernet packet
-				var ethernetPacket = new EthernetPacket(sourceMac, destMac, EthernetType.IPv4);
-
-				// Get local IP from device
 				IPAddress localIp = GetLocalIpFromDevice(device, AddressFamily.InterNetwork)
 				                    ?? throw new Exception("Could not determine local IP address.");
 
 				// Create IP packet
-				var ipPacket = new IPv4Packet(localIp, targetIp)
-				{
-					Protocol = PacketDotNet.ProtocolType.Tcp,
-					TimeToLive = 64
-				};
 
-				// Generate a random source port
-				sourcePort = new Random().Next(1024, 65535); // Use a lower port range
 
-				// Create TCP SYN packet
-				var tcpPacket = new TcpPacket((ushort)sourcePort, (ushort)targetPort)
-				{
-					Flags = (ushort)TcpFlags.Syn,
-					SequenceNumber = (uint)new Random().Next(1000, 99999),
-					WindowSize = 64240
-				};
-
-				int biggerHeadersize = 24;
-				var bigHeader = new byte[biggerHeadersize];
-
-				Array.Copy(tcpPacket.Bytes, 0, bigHeader, 0, tcpPacket.Bytes.Length);
-
-				var finalTcp = new TcpPacket(new ByteArraySegment(bigHeader))
-				{
-					Flags = tcpPacket.Flags,
-					SequenceNumber = tcpPacket.SequenceNumber,
-					WindowSize = tcpPacket.WindowSize,
-					SourcePort = tcpPacket.SourcePort,
-					DestinationPort = tcpPacket.DestinationPort
-				};
-
-				finalTcp.DataOffset = (byte)(biggerHeadersize / 4);
-				finalTcp.Options = new byte[] { (byte)TcpFlags.Syn, (byte)TcpFlags.Rst, (byte)TcpFlags.MssKind, (byte)TcpFlags.MssLength };
-
-				// Ensure packets are properly linked before updating checksum
-				ipPacket.PayloadPacket = finalTcp;
-				ethernetPacket.PayloadPacket = ipPacket;
-				finalTcp.ParentPacket = ipPacket;
-				ipPacket.ParentPacket = ethernetPacket;
-
-				finalTcp.UpdateTcpChecksum();
-				ipPacket.UpdateIPChecksum();
-				finalTcp.UpdateTcpChecksum();
-
-				return ethernetPacket.Bytes;
+				return null;
+				//return ethernetPacket.Bytes;
 			}
 			catch (Exception ex)
 			{
