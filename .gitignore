@@ -1,2 +1,41 @@
 # Ignore Rider settings
 .idea/
+*.iml
+Project1_Omega.sln.DotSettings.user
+
+# Ignore build outputs
+Project1_Omega/bin/
+Project1_Omega/obj/
+bin/
+obj/
+
+# Ignore NuGet package caches
+packages/
+*.nupkg
+*.snupkg
+
+# Ignore test result files
+TestResults/
+*.trx
+
+# Ignore developer certificates
+*.pfx
+*.cer
+
+# Ignore temporary files and logs
+*.log
+*.tmp
+_ReSharper.*/
+
+# Ignore operating system specific files
+.DS_Store
+Thumbs.db
+
+# Ignore user-specific files (if any)
+# user.config
+# *.suo
+
+# Ignore build server artifacts
+_PublishedWebsites/
+
+# Other project-specific ignores can be added below this line
