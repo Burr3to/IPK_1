@@ -2,30 +2,52 @@ namespace Project1_Omega;
 
 public static class Utils
 {
-	public static IPAddress GetLocalIpFromDevice(ICaptureDevice device, AddressFamily addressFamily)
+	// Flags enum for representing TCP flags and options.
+	[Flags]
+	public enum Flags : byte
 	{
+		Nul = 0x00,
+		Syn = 0x02,
+		Rst = 0x04,
+		Ack = 0x10,
+		SynAck = Syn | Ack, // 0x12
+
+		MssKind = 0x02, // MSS option kind
+		MssLength = 0x04, // MSS option length (should always be 4)
+	}
+
+	// Enum for representing the result of a port scan.
+	public enum ScanResult
+	{
+		open,
+		closed,
+		filtered,
+		Unknown
+	}
+
+	// Retrieves the local IP address for a given network interface and address family.
+	public static IPAddress GetLocalIpFromDevice(string interfaceName, AddressFamily addressFamily)
+	{
+		if (string.IsNullOrEmpty(interfaceName))
+			throw new Exception($"[GetLocalIpFromDevice] {interfaceName} is null or Empty");
+
 		try
 		{
 			foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
 			{
-				//Console.WriteLine($"Checking interface: {ni.Name}, Operational Status: {ni.OperationalStatus}, Description: {ni.Description}");
-				// Check if the MAC address matches
-				if (ni.GetPhysicalAddress().Equals(device.MacAddress))
+				if (ni.Name.Equals(interfaceName, StringComparison.OrdinalIgnoreCase))
 				{
 					foreach (UnicastIPAddressInformation ipInfo in ni.GetIPProperties().UnicastAddresses)
 					{
-						//Console.WriteLine($"  IP Address: {ipInfo.Address}, Address Family: {ipInfo.Address.AddressFamily}");
 						if (ipInfo.Address.AddressFamily == addressFamily)
 						{
-							//Console.WriteLine($"  Matching IP found: {ipInfo.Address}");
 							return ipInfo.Address;
 						}
 					}
 				}
 			}
 
-			Console.WriteLine("No matching IP address found.");
-			throw new Exception();
+			throw new Exception($"No matching IP address found for interface: {interfaceName}");
 		}
 		catch (Exception ex)
 		{
@@ -34,102 +56,38 @@ public static class Utils
 		}
 	}
 
-	public static PhysicalAddress GetMacAddressFromDevice(ICaptureDevice device)
+	// Resolves a domain name to an array of IP addresses.
+	public static IPAddress[] ResolveDomain(string hostname)
 	{
-		if (device == null)
+		try
 		{
-			throw new ArgumentNullException(nameof(device));
+			return Dns.GetHostAddresses(hostname);
 		}
-
-		PhysicalAddress deviceMac = device.MacAddress;
-
-		// Find the network interface with the matching MAC address
-		foreach (var netInterface in NetworkInterface.GetAllNetworkInterfaces())
+		catch (Exception)
 		{
-			if (netInterface.GetPhysicalAddress().Equals(deviceMac))
-			{
-				return netInterface.GetPhysicalAddress();
-			}
+			throw new Exception($"Domain resolution failed for {hostname}.");
 		}
-
-		throw new Exception("Could not determine MAC address.");
 	}
 
-	public static ICaptureDevice? GetNetworkInterface(string _interfaceName)
+	// Computes the 16-bit checksum of a byte array.
+	public static ushort ComputeChecksum(byte[] buffer)
 	{
-		var devices = CaptureDeviceList.Instance;
-		if (devices.Count < 1)
+		uint checksum = 0;
+		for (int i = 0; i < buffer.Length; i += 2)
 		{
-			Console.Error.WriteLine("[ScanTcpPort] No network interfaces found. Exiting.");
-			return null;
-		}
-
-
-		ICaptureDevice? device = null;
-		if (!string.IsNullOrEmpty(_interfaceName))
-		{
-			device = devices.FirstOrDefault(d =>
-				d.Name.Contains(_interfaceName, StringComparison.OrdinalIgnoreCase)
-				|| d.Description.Contains(_interfaceName, StringComparison.OrdinalIgnoreCase));
-
-
-			if (device == null)
+			if (i + 1 < buffer.Length)
 			{
-				Console.Error.WriteLine($"[ScanTcpPort] Error: Specified interface '{_interfaceName}' not found.");
-				return null;
+				checksum += (ushort)((buffer[i] << 8) | buffer[i + 1]);
 			}
-		}
-		else
-		{
-			Console.WriteLine("Available Interfaces:");
-			foreach (var dev in devices)
+			else
 			{
-				Console.WriteLine($"  - {dev.Name} ({dev.Description})");
-			}
-
-			return null;
-		}
-
-		return device;
-	}
-
-	public static IPAddress ResolveDomain(string hostname)
-	{
-		var addresses = Dns.GetHostAddresses(hostname);
-		return addresses.Length > 0 ? addresses[0] : throw new Exception("Domain resolution failed.");
-	}
-
-	private static bool IsLocalNetwork(IPAddress ipAddress)
-	{
-		foreach (var netInterface in NetworkInterface.GetAllNetworkInterfaces())
-		{
-			foreach (var unicast in netInterface.GetIPProperties().UnicastAddresses)
-			{
-				if (unicast.Address.AddressFamily == ipAddress.AddressFamily)
-				{
-					byte[] ipBytes = ipAddress.GetAddressBytes();
-					byte[] localIpBytes = unicast.Address.GetAddressBytes();
-					byte[] subnetMaskBytes = unicast.IPv4Mask?.GetAddressBytes();
-
-					if (subnetMaskBytes != null)
-					{
-						bool isLocal = true;
-						for (int i = 0; i < ipBytes.Length; i++)
-						{
-							if ((ipBytes[i] & subnetMaskBytes[i]) != (localIpBytes[i] & subnetMaskBytes[i]))
-							{
-								isLocal = false;
-								break;
-							}
-						}
-
-						if (isLocal)
-							return true;
-					}
-				}
+				checksum += (ushort)(buffer[i] << 8);
 			}
 		}
 
-		return false;
+		checksum = (checksum >> 16) + (checksum & 0xFFFF);
+		checksum += (checksum >> 16);
+		ushort finalChecksum = (ushort)(~checksum);
+		return finalChecksum;
 	}
 }

@@ -1,41 +1,16 @@
-using System.Buffers.Binary;
-using PacketDotNet.Utils;
 using static Project1_Omega.Utils;
 
 namespace Project1_Omega.Scanners
 {
 	public class TcpScanner
 	{
-		[Flags]
-		public enum TcpFlags : byte
-		{
-			Fin = 0x01,
-			Syn = 0x02,
-			Rst = 0x04,
-			Psh = 0x08,
-			Ack = 0x10,
-			Urg = 0x20,
-			Ece = 0x40,
-			Cwr = 0x80,
-			SynAck = Syn | Ack, // 0x12
-
-			MssKind = 0x02, // MSS option kind
-			MssLength = 0x04 // MSS option length (should always be 4)
-		}
-
-		public enum TcpScanResult
-		{
-			Open,
-			Closed,
-			Filtered,
-			Unknown // Unknown means no response was seen in one attempt.
-		}
-
+		// Target IP, TCP ports, timeout, and optional interface.
 		private readonly string _targetIp;
 		private readonly List<int> _tcpPorts;
 		private readonly int _timeout;
 		private readonly string? _interfaceName;
 
+		// Initializes TcpScanner with target, ports, timeout, and interface.
 		public TcpScanner(string targetIp, List<int> tcpPorts, int timeout, string? interfaceName = null)
 		{
 			_targetIp = targetIp;
@@ -44,149 +19,206 @@ namespace Project1_Omega.Scanners
 			_interfaceName = interfaceName;
 		}
 
-
-		//Starts asynchronous TCP port scanning through all input targets/ports
+		// Starts asynchronous TCP port scanning for all target ports.
 		public async Task ScanTcpAsync()
 		{
-			//Console.WriteLine($"Starting TCP SYN Scan on {_targetIp} using interface {_interfaceName ?? "default"}...");
 			List<Task> scanTasks = new();
-			Console.WriteLine("PORT STATE:");
-
 			foreach (var port in _tcpPorts)
 				scanTasks.Add(Task.Run(() => ScanTcpPort(port)));
-
 			await Task.WhenAll(scanTasks);
 		}
 
-		// Scans one TCP port: sends a SYN packet via a raw socket, then waits for a response.
+		// Scans a single TCP port.
 		private void ScanTcpPort(int port)
 		{
 			IPAddress targetIp = IPAddress.Parse(_targetIp);
-			Console.WriteLine($"Scanning TCP Port {port} on {targetIp}");
-			ICaptureDevice device = GetNetworkInterface(_interfaceName);
+			AddressFamily addressFamily = targetIp.AddressFamily;
+
+			// Create a raw socket based on the address family.
+			using Socket rawSocket = addressFamily == AddressFamily.InterNetworkV6
+				? CreateRawTcpSocketIPv6(_timeout)
+				: CreateRawSocket(AddressFamily.InterNetwork, _timeout);
+
+			// Include header if working with IPv4
+			if (addressFamily == AddressFamily.InterNetwork)
+				rawSocket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.HeaderIncluded, true);
 
 			Random rand = new Random();
-			int sentSourcePort = rand.Next(1024, 59999);
+			int sentSourcePort = rand.Next(1025, 63636);
 
-			// Build the IPv4 packet (IP header + TCP SYN segment).
-			byte[] packet = BuildIpv4TcpSynPacketRaw(device, targetIp, port, sentSourcePort);
-
-			// Send the packet using a raw socket.
-			SendSynPacketRaw(targetIp, packet);
-
-			// Wait for a TCP response.
-			TcpScanResult result = WaitForTcpResponse(device, targetIp, port, sentSourcePort, _timeout);
-
-			// If no response, resend a second SYN to verify.
-			if (result == TcpScanResult.Unknown)
+			byte[] packet;
+			if (addressFamily == AddressFamily.InterNetworkV6)
 			{
-				Console.WriteLine("No response received; re-sending SYN to verify.");
-				SendSynPacketRaw(targetIp, packet);
-				result = WaitForTcpResponse(device, targetIp, port, sentSourcePort, _timeout);
-				if (result == TcpScanResult.Unknown)
-					result = TcpScanResult.Filtered;
+				packet = BuildTcpSynSegment(sentSourcePort, port);
+				IPAddress localIp = Utils.GetLocalIpFromDevice(_interfaceName, AddressFamily.InterNetworkV6);
+				ushort tcpChecksum = ComputeTcpChecksumIPv6(localIp, targetIp, packet);
+				packet[16] = (byte)(tcpChecksum >> 8);
+				packet[17] = (byte)(tcpChecksum & 0xFF);
+			}
+			else
+				packet = BuildIpv4TcpSynPacketRaw(targetIp, port, sentSourcePort);
+
+			SendPacket(rawSocket, targetIp, packet);
+			ScanResult result = WaitForTcpResponse(targetIp, port, sentSourcePort, _timeout);
+
+			// Re-send SYN if no initial response.
+			if (result == ScanResult.Unknown)
+			{
+				SendPacket(rawSocket, targetIp, packet);
+				result = WaitForTcpResponse(targetIp, port, sentSourcePort, _timeout);
+				if (result == ScanResult.Unknown)
+					result = ScanResult.filtered;
 			}
 
-			Console.WriteLine($"Port {port} scan result: {result}");
+			Console.WriteLine($"{targetIp} {port} tcp {result}");
 		}
 
-		// Builds an IPv4 packet (IP header + TCP SYN segment) for raw socket transmission.
-		private byte[] BuildIpv4TcpSynPacketRaw(ICaptureDevice device, IPAddress targetIp, int targetPort, int sourcePort)
+		// Sends a raw packet to the specified target IP address.
+		private void SendPacket(Socket socket, IPAddress targetIp, byte[] packet)
 		{
-			// Get the local IP address (implement GetLocalIp() as appropriate)
-			IPAddress localIp = GetLocalIpFromDevice(device, AddressFamily.InterNetwork);
-			byte[] tcpSegment = BuildTcpSynSegment(sourcePort, targetPort);
-			byte[] ipv4Packet = BuildIpv4Packet(localIp, targetIp, tcpSegment);
-			return ipv4Packet;
+			IPEndPoint endPoint = new IPEndPoint(targetIp, 0);
+			socket.SendTo(packet, endPoint);
 		}
 
-		// Sends the constructed IPv4 packet via a raw socket.
-		private void SendSynPacketRaw(IPAddress targetIp, byte[] packet)
-		{                                  
-			// Create a raw socket for IPv4 using the TCP protocol.
-			using (Socket rawSocket = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Tcp))
-			{
-				// Set the IP_HDRINCL option so that the OS knows our packet contains its own IP header.
-				rawSocket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.HeaderIncluded, true);
-				rawSocket.SendTimeout = _timeout;
-
-				IPEndPoint endPoint = new IPEndPoint(targetIp, 0);
-				rawSocket.SendTo(packet, endPoint);
-				Console.WriteLine($"Sent SYN packet to {targetIp}");
-			}
-		}
-
-		// Waits for a TCP response using a raw socket. Returns the scan result based on TCP flags.
-		private TcpScanResult WaitForTcpResponse(ICaptureDevice device, IPAddress targetIp, int targetPort, int sentSourcePort, int timeoutMs)
+		// Creates a raw socket for the specified address family and binds it to a local IP.
+		private Socket CreateRawSocket(AddressFamily af, int timeoutMs)
 		{
-			TcpScanResult result = TcpScanResult.Unknown;
+			Socket sock = new Socket(af, SocketType.Raw, ProtocolType.Raw);
+			IPAddress localIp = GetLocalIpFromDevice(_interfaceName, af);
+			sock.Bind(new IPEndPoint(localIp, 0));
+			sock.ReceiveTimeout = timeoutMs;
+			return sock;
+		}
 
-			// Create a raw socket for receiving TCP packets.
-			Socket recvSocket = new Socket(AddressFamily.InterNetwork, SocketType.Raw, ProtocolType.Tcp);
-			recvSocket.Bind(new IPEndPoint(GetLocalIpFromDevice(device, AddressFamily.InterNetwork), 0));
-			recvSocket.ReceiveTimeout = timeoutMs;
+		// Creates a raw TCP socket  for IPv6.
+		private Socket CreateRawTcpSocketIPv6(int timeoutMs)
+		{
+			Socket sock = new Socket(AddressFamily.InterNetworkV6, SocketType.Raw, ProtocolType.Tcp);
+			sock.ReceiveTimeout = timeoutMs;
+			return sock;
+		}
 
-			byte[] buffer = new byte[4096];
-			DateTime start = DateTime.Now;
+		// Helper: Process an IPv4 packet response.
+		private ScanResult? ProcessIPv4Response(byte[] buffer, int received, int targetPort, int sentSourcePort, IPAddress targetIp)
+		{
+			// IPv4 header minimum size
+			if (received < 20)
+				return null;
 
-			while ((DateTime.Now - start).TotalMilliseconds < timeoutMs)
+			int ipHeaderLength = (buffer[0] & 0x0F) * 4;
+			if (received < ipHeaderLength + 20)
+				return null;
+
+			// IP Protocol field = TCP packet (value 6)
+			if (buffer[9] != 6)
+				return null;
+
+			// Extract the IPv4 source IP (offset 12, length 4).
+			byte[] srcIpBytes = new byte[4];
+			Array.Copy(buffer, 12, srcIpBytes, 0, 4);
+			IPAddress receivedSourceIp = new IPAddress(srcIpBytes);
+
+			if (!receivedSourceIp.Equals(targetIp))
+				return null;
+
+			// TCP header after the IPv4 header.
+			int tcpHeaderStart = ipHeaderLength;
+			int tcpSourcePort = (buffer[tcpHeaderStart] << 8) | buffer[tcpHeaderStart + 1];
+			int tcpDestinationPort = (buffer[tcpHeaderStart + 2] << 8) | buffer[tcpHeaderStart + 3];
+			if (tcpSourcePort != targetPort || tcpDestinationPort != sentSourcePort)
+				return null;
+
+			// TCP flags at offset tcpHeaderStart + 13.
+			byte tcpFlags = buffer[tcpHeaderStart + 13];
+			if ((tcpFlags & (byte)Flags.Rst) != 0)
+				return ScanResult.closed;
+			if ((tcpFlags & (byte)Flags.SynAck) == (byte)Flags.SynAck)
+				return ScanResult.open;
+
+			return null;
+		}
+
+		// Helper: Process an IPv6 packet response.
+		private ScanResult? ProcessIPv6Response(byte[] buffer, int received, int targetPort, int sentSourcePort)
+		{
+			if (received < 20)
+				return null;
+
+			int tcpHeaderStart = 0;
+
+			// Extract and compare TCP source and destination ports.
+			int tcpSourcePort = (buffer[tcpHeaderStart] << 8) | buffer[tcpHeaderStart + 1];
+			int tcpDestinationPort = (buffer[tcpHeaderStart + 2] << 8) | buffer[tcpHeaderStart + 3];
+			if (tcpSourcePort != targetPort || tcpDestinationPort != sentSourcePort)
+				return null;
+
+			// Check TCP flags for RST or SYN-ACK.
+			byte tcpFlags = buffer[tcpHeaderStart + 13];
+			if ((tcpFlags & (byte)Flags.Rst) != 0)
+				return ScanResult.closed;
+			if ((tcpFlags & (byte)Flags.SynAck) == (byte)Flags.SynAck)
+				return ScanResult.open;
+
+			return null;
+		}
+
+		// Waits for a TCP response (SYN-ACK or RST) within the specified timeout.
+		private ScanResult WaitForTcpResponse(IPAddress targetIp, int targetPort, int sentSourcePort, int timeoutMs)
+		{
+			ScanResult result = ScanResult.Unknown;
+			AddressFamily addressFamily = targetIp.AddressFamily;
+			IPAddress localIp = GetLocalIpFromDevice(_interfaceName, addressFamily);
+
+			// Creates a new raw TCP socket for the determined address family (IPv4 or IPv6).
+			using Socket socket = new Socket(addressFamily, SocketType.Raw, ProtocolType.Tcp);
+			try
 			{
-				try
+				socket.Bind(new IPEndPoint(localIp, sentSourcePort));
+				socket.ReceiveTimeout = timeoutMs;
+
+				byte[] buffer = new byte[4096];
+				DateTime start = DateTime.Now;
+
+				while ((DateTime.Now - start).TotalMilliseconds < timeoutMs)
 				{
-					int received = recvSocket.Receive(buffer);
-					if (received < 20) // must at least have an IP header
-						continue;
-
-					// Determine IP header length.
-					int ipHeaderLength = (buffer[0] & 0x0F) * 4;
-					if (received < ipHeaderLength + 20)
-						continue;
-
-					// Extract the source IP (offset 12, length 4).
-					byte[] srcIpBytes = new byte[4];
-					Array.Copy(buffer, 12, srcIpBytes, 0, 4);
-					IPAddress srcIp = new IPAddress(srcIpBytes);
-
-					// Only consider packets coming from our target IP.
-					if (!srcIp.Equals(targetIp))
-						continue;
-
-					// Locate the TCP header.
-					int tcpHeaderStart = ipHeaderLength;
-
-					// Get TCP source and destination ports.
-					int tcpSourcePort = (buffer[tcpHeaderStart] << 8) | buffer[tcpHeaderStart + 1];
-					int tcpDestinationPort = (buffer[tcpHeaderStart + 2] << 8) | buffer[tcpHeaderStart + 3];
-
-					// Check that the response is for our connection.
-					if (tcpSourcePort != targetPort || tcpDestinationPort != sentSourcePort)
-						continue;
-
-					// TCP flags are at offset tcpHeaderStart + 13.
-					byte tcpFlags = buffer[tcpHeaderStart + 13];
-
-					if ((tcpFlags & (byte)TcpFlags.Rst) != 0)
+					int received;
+					try
 					{
-						result = TcpScanResult.Closed;
+						received = socket.Receive(buffer);
+					}
+					catch (SocketException) // Break out of the receive loop on SocketException.
+					{
 						break;
 					}
-					else if ((tcpFlags & (byte)TcpFlags.SynAck) == (byte)TcpFlags.SynAck)
+					catch (Exception ex) // Break out of the receive loop on other exceptions.
 					{
-						result = TcpScanResult.Open;
+						Console.Error.WriteLine($"[Exception] Unexpected error: {ex.Message}");
 						break;
 					}
-				}
-				catch (SocketException)
-				{
-					// A timeout or error during receive.
-					break;
+
+					ScanResult? scanResult = addressFamily == AddressFamily.InterNetwork
+						? ProcessIPv4Response(buffer, received, targetPort, sentSourcePort, targetIp)
+						: ProcessIPv6Response(buffer, received, targetPort, sentSourcePort);
+
+					if (scanResult.HasValue)
+					{
+						result = scanResult.Value;
+						break; // Exit the while loop if a valid scan result is obtained.
+					}
 				}
 			}
+			catch (SocketException ex)
+			{
+				Console.Error.WriteLine($"[SocketException] Error creating or binding socket: {ex.Message}");
+			}
 
-			recvSocket.Close();
+			finally
+			{
+				socket.Close();
+			}
+
 			return result;
 		}
-
 
 		// Builds a 24-byte TCP SYN segment with a 4-byte MSS option.
 		private byte[] BuildTcpSynSegment(int sourcePort, int targetPort)
@@ -211,12 +243,11 @@ namespace Project1_Omega.Scanners
 			//Acknowledgment number
 			Array.Clear(tcp, 8, 4);
 			//Data Offset defines TCP header in 32bit words
-			//4bits upper half data offset
 			tcp[12] = 0x60; // 24 bytes, offset = 6 (6 x 4 = 24)
 			//store TCP Flags(SYN,ACK)
-			tcp[13] = (byte)TcpFlags.Syn;
-			//Window size 16384 gen value
-			tcp[14] = 0x40;
+			tcp[13] = (byte)Flags.Syn;
+			//Window size
+			tcp[14] = 0x04;
 			tcp[15] = 0x00;
 			//checksum empty, compute later
 			tcp[16] = 0x00;
@@ -226,14 +257,54 @@ namespace Project1_Omega.Scanners
 			tcp[19] = 0x00;
 
 			// --- TCP Options ---
-			// Adding the Maximum Segment Size (MSS) option (4 bytes):
-			// Option Kind: MSS (0x02), Option Length: 4, then the MSS value
-			tcp[20] = (byte)TcpFlags.MssKind; // MSS option kind (0x02)
-			tcp[21] = (byte)TcpFlags.MssLength; // MSS option length (0x04)
+			// Adding the Maximum Segment Size (MSS) option
+			// Option Kind: MSS (0x02), Option Length: 4
+			tcp[20] = (byte)Flags.MssKind; // MSS option kind (0x02)
+			tcp[21] = (byte)Flags.MssLength; // MSS option length (0x04)
 			tcp[22] = 0x05; // MSS value high byte (1460 = 0x05B4)
 			tcp[23] = 0xB4; // MSS value low byte
 
 			return tcp;
+		}
+
+		// Computes the TCP checksum for IPv6.
+		private ushort ComputeTcpChecksumIPv6(IPAddress src, IPAddress dst, byte[] tcpSegment)
+		{
+			byte[] srcBytes = src.GetAddressBytes();
+			byte[] dstBytes = dst.GetAddressBytes();
+			int tcpLength = tcpSegment.Length;
+
+			// Build the IPv6 pseudo-header (40 bytes)
+			byte[] pseudoHeader = new byte[40];
+			// Source Address (16 bytes)
+			Array.Copy(srcBytes, 0, pseudoHeader, 0, 16);
+			// Destination Address (16 bytes)
+			Array.Copy(dstBytes, 0, pseudoHeader, 16, 16);
+			// TCP Length (4 bytes) in network byte order
+			pseudoHeader[32] = (byte)(tcpLength >> 24);
+			pseudoHeader[33] = (byte)(tcpLength >> 16);
+			pseudoHeader[34] = (byte)(tcpLength >> 8);
+			pseudoHeader[35] = (byte)(tcpLength);
+			// Next Header TCP is 6
+			pseudoHeader[39] = 6;
+
+			// Create a buffer that is the concatenation of the pseudo-header and the TCP segment.
+			byte[] checksumBuffer = new byte[pseudoHeader.Length + tcpSegment.Length];
+			Array.Copy(pseudoHeader, 0, checksumBuffer, 0, pseudoHeader.Length);
+			Array.Copy(tcpSegment, 0, checksumBuffer, pseudoHeader.Length, tcpSegment.Length);
+
+			// Compute the checksum over the combined buffer.
+			return ComputeChecksum(checksumBuffer);
+		}
+
+		//IPv4
+		// Builds an IPv4 packet (IP header + TCP SYN segment) for raw socket transmission.
+		private byte[] BuildIpv4TcpSynPacketRaw(IPAddress targetIp, int targetPort, int sourcePort)
+		{
+			IPAddress localIp = GetLocalIpFromDevice(_interfaceName, AddressFamily.InterNetwork);
+			byte[] tcpSegment = BuildTcpSynSegment(sourcePort, targetPort);
+			byte[] ipv4Packet = BuildIpv4Packet(localIp, targetIp, tcpSegment);
+			return ipv4Packet;
 		}
 
 		// Builds an IPv4 packet that encapsulates the provided TCP segment.
@@ -257,7 +328,7 @@ namespace Project1_Omega.Scanners
 			ipHeader[5] = (byte)(ident & byteMax); //!
 
 			// Flags and Fragment Offset
-			ipHeader[6] = 0x40; //dont fragment
+			ipHeader[6] = 0x00; //dont fragment
 			ipHeader[7] = 0x00;
 
 			// TTL typical value such as 64.
@@ -283,7 +354,6 @@ namespace Project1_Omega.Scanners
 			ipHeader[10] = (byte)(ipChecksum >> 8);
 			ipHeader[11] = (byte)(ipChecksum & 0xFF);
 
-			//tcp heaader needs src and dest ip to calculate checksum
 			// TCP Checksum
 			// pseudo-header for TCP checksum calculation.
 			byte[] pseudoHeader = new byte[12];
@@ -310,31 +380,6 @@ namespace Project1_Omega.Scanners
 			Array.Copy(tcpSegment, 0, ipv4Packet, ipHeader.Length, tcpSegment.Length);
 
 			return ipv4Packet;
-		}
-
-		private ushort ComputeChecksum(byte[] data)
-		{
-			uint sum = 0;
-			int i = 0;
-			while (i < data.Length - 1)
-			{
-				ushort word = (ushort)((data[i] << 8) + data[i + 1]);
-				sum += word;
-				i += 2;
-			}
-
-			if (i < data.Length)
-			{
-				ushort word = (ushort)(data[i] << 8);
-				sum += word;
-			}
-
-			while ((sum >> 16) != 0)
-			{
-				sum = (sum & 0xFFFF) + (sum >> 16);
-			}
-
-			return (ushort)(~sum);
 		}
 	}
 }
